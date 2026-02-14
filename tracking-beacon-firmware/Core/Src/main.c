@@ -22,6 +22,10 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "passthrough.h"
+#include "rssi.h"
+#include "stepper.h"
+#include "setup.h"
+#include "tracker.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -115,7 +119,11 @@ int main(void)
   MX_UART4_Init();
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
+  Stepper_Init();
+  Setup_ManualAlign(); /* blocks until user presses ENTER */
   Passthrough_Init();
+  RSSI_Init();
+  Tracker_Init(49.2606f, -123.2460f, 80.0f); /* UBC — update for launch site */
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -125,6 +133,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    RSSI_Poll();
+    Tracker_Poll();
+    Stepper_Poll();
   }
   /* USER CODE END 3 */
 }
@@ -463,7 +474,17 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+  Passthrough_HandleRxEvent(huart, Size);
+  RSSI_HandleRxEvent(huart, Size);
+  Tracker_HandleRxEvent(huart, Size);
+}
 
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+  Passthrough_HandleTxCplt(huart);
+}
 /* USER CODE END 4 */
 
 /**

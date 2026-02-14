@@ -66,14 +66,7 @@ void Passthrough_HandleTxCplt(UART_HandleTypeDef *huart)
     }
 }
 
-/* Override weak HAL callbacks */
-
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+const uint8_t *Passthrough_GetCenterRxBuf(void)
 {
-    Passthrough_HandleRxEvent(huart, Size);
-}
-
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
-{
-    Passthrough_HandleTxCplt(huart);
+    return radio_to_pc.rx_buf;
 }
