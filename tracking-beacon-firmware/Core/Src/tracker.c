@@ -15,7 +15,7 @@
 
 extern UART_HandleTypeDef huart1;
 
-/* Center antenna stream reader (shares passthrough rx buffer) */
+/* ---- Center antenna stream reader ---- */
 static const uint8_t *center_rx_buf;
 static volatile uint16_t write_pos;
 static uint16_t read_pos;
@@ -25,17 +25,30 @@ static uint8_t frame_buf[COBS_MAX_FRAME];
 static uint16_t frame_pos;
 static uint8_t decode_buf[COBS_MAX_FRAME];
 
-/* Ground station position (radians, meters) */
+/* ---- Ground station (radians, meters) ---- */
 static float ground_lat_rad, ground_lon_rad, ground_alt;
 
-/* Tracking state */
+/* ---- Tracking state ---- */
 static float initial_az, initial_el;
 static float current_az, current_el;
 static uint8_t has_initial_fix;
 static uint8_t has_rocket_fix;
-static uint32_t last_rssi_check;
 
-/* ---- COBS decoder ---- */
+/* ---- Velocity estimation ---- */
+static float prev_alt;
+static float prev_az_for_vel;
+static uint32_t prev_gps_tick;
+static float v_up;          /* smoothed vertical velocity (m/s) */
+static float horiz_dist;    /* horizontal distance to rocket (m) */
+static float vel_az;         /* smoothed azimuth angular rate (rad/s) */
+static uint8_t has_velocity;
+
+/* ---- Control loop ---- */
+static uint32_t last_ctrl_tick;
+
+/* ================================================================
+ * COBS decoder
+ * ================================================================ */
 
 static int cobs_decode(const uint8_t *in, size_t in_len,
                        uint8_t *out, size_t out_max)
@@ -60,7 +73,9 @@ static int cobs_decode(const uint8_t *in, size_t in_len,
     return (int)wp;
 }
 
-/* ---- Geodetic math ---- */
+/* ================================================================
+ * Geodetic math
+ * ================================================================ */
 
 static float calc_bearing(float lat1, float lon1, float lat2, float lon2)
 {
@@ -88,27 +103,83 @@ static float angle_wrap(float d)
     return d;
 }
 
-/* ---- Packet handling ---- */
-
-static void handle_gps_packet(const GpsPacket *pkt)
+static float clampf(float v, float lo, float hi)
 {
-    float lat_rad = pkt->latitude  * DEG_TO_RAD;
-    float lon_rad = pkt->longitude * DEG_TO_RAD;
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+/* ================================================================
+ * GPS fix handling + velocity estimation
+ * ================================================================ */
+
+static void update_gps_fix(float lat_deg, float lon_deg, float alt_m)
+{
+    float lat_rad = lat_deg * DEG_TO_RAD;
+    float lon_rad = lon_deg * DEG_TO_RAD;
 
     float az   = calc_bearing(ground_lat_rad, ground_lon_rad, lat_rad, lon_rad);
     float dist = calc_horiz_dist(ground_lat_rad, ground_lon_rad, lat_rad, lon_rad);
-    float el   = atan2f(pkt->altitude - ground_alt, dist);
+    float el   = atan2f(alt_m - ground_alt, dist);
 
+    /* Record initial pointing direction */
     if (!has_initial_fix) {
         initial_az = az;
         initial_el = el;
         has_initial_fix = 1;
     }
 
+    /* Velocity estimation (needs ≥2 fixes) */
+    uint32_t now = HAL_GetTick();
+    if (has_rocket_fix) {
+        float dt = (now - prev_gps_tick) / 1000.0f;
+        if (dt > 0.01f) {
+            /* Vertical velocity — the primary signal for related rates */
+            float raw_v_up = (alt_m - prev_alt) / dt;
+            v_up = TRACKER_VEL_ALPHA * raw_v_up +
+                   (1.0f - TRACKER_VEL_ALPHA) * v_up;
+
+            /* Azimuth angular velocity — captures wind drift */
+            float raw_vel_az = angle_wrap(az - prev_az_for_vel) / dt;
+            raw_vel_az = clampf(raw_vel_az, -TRACKER_VEL_MAX, TRACKER_VEL_MAX);
+            vel_az = TRACKER_VEL_ALPHA * raw_vel_az +
+                     (1.0f - TRACKER_VEL_ALPHA) * vel_az;
+
+            has_velocity = 1;
+        }
+    }
+
+    /* Snap position to GPS truth */
     current_az = az;
     current_el = el;
+    horiz_dist = dist;
     has_rocket_fix = 1;
+
+    /* Store for next velocity diff */
+    prev_alt = alt_m;
+    prev_az_for_vel = az;
+    prev_gps_tick = now;
 }
+
+/* ================================================================
+ * Protobuf GPS parsing — TODO
+ * ================================================================ */
+
+/* TODO: implement when protobuf schema is available.
+ * Decode the protobuf payload and extract GPS fields.
+ * Returns 1 if a GPS message was found, fills out lat/lon/alt. */
+static int parse_gps_protobuf(const uint8_t *data, size_t len,
+                               float *lat, float *lon, float *alt)
+{
+    (void)data; (void)len;
+    (void)lat; (void)lon; (void)alt;
+    return 0;
+}
+
+/* ================================================================
+ * COBS frame processing
+ * ================================================================ */
 
 static void process_frame(void)
 {
@@ -119,9 +190,12 @@ static void process_frame(void)
 
     int len = cobs_decode(frame_buf, frame_pos, decode_buf, sizeof(decode_buf));
     frame_pos = 0;
+    if (len < 0)
+        return;
 
-    if (len == (int)sizeof(GpsPacket) && decode_buf[0] == GPS_PACKET_ID)
-        handle_gps_packet((const GpsPacket *)decode_buf);
+    float lat, lon, alt;
+    if (parse_gps_protobuf(decode_buf, (size_t)len, &lat, &lon, &alt))
+        update_gps_fix(lat, lon, alt);
 }
 
 static void process_byte(uint8_t byte)
@@ -136,62 +210,87 @@ static void process_byte(uint8_t byte)
         frame_pos = 0;
 }
 
-/* ---- Tracking modes ---- */
+/* ================================================================
+ * Fused tracking controller
+ * GPS feedforward (related rates) + RSSI feedback (proportional)
+ * ================================================================ */
 
-static uint8_t rssi_available(void)
+static void tracking_update(void)
 {
     uint32_t now = HAL_GetTick();
-    for (int i = 0; i < RSSI_NUM_OUTER; i++) {
-        const RssiReading *r = RSSI_GetReading(i);
-        if (!r->valid || (now - r->timestamp) >= TRACKER_RSSI_TIMEOUT)
-            return 0;
+    float dt_since_fix = (now - prev_gps_tick) / 1000.0f;
+
+    /* ── 1. Feedforward: predict angle from velocity ── */
+    float pred_az, pred_el;
+    float omega_az = 0.0f, omega_el = 0.0f;
+
+    if (has_velocity) {
+        /* Related rates: elevation angular velocity from vertical speed
+         * dθ/dt = v_up · cos²(θ) / d */
+        float cos_el = cosf(current_el);
+        if (horiz_dist > 1.0f)
+            omega_el = v_up * cos_el * cos_el / horiz_dist;
+
+        omega_az = vel_az;
+
+        pred_az = current_az + omega_az * dt_since_fix;
+        pred_el = current_el + omega_el * dt_since_fix;
+    } else {
+        pred_az = current_az;
+        pred_el = current_el;
     }
-    return 1;
-}
 
-static void rssi_track(void)
-{
-    uint32_t now = HAL_GetTick();
-    if ((now - last_rssi_check) < TRACKER_RSSI_POLL_MS)
-        return;
-    last_rssi_check = now;
+    /* ── 2. Feedback: RSSI proportional correction ── */
+    float rssi_corr_az = 0.0f;
+    float rssi_corr_el = 0.0f;
 
-    /* Azimuth: outer1 (+az) vs outer2 (-az), compare local RSSI */
     const RssiReading *r1 = RSSI_GetReading(RSSI_ANT_OUTER1);
     const RssiReading *r2 = RSSI_GetReading(RSSI_ANT_OUTER2);
-    int16_t diff_az = (int16_t)r1->left - (int16_t)r2->left;
+    if (r1->valid && r2->valid &&
+        (now - r1->timestamp) < TRACKER_RSSI_TIMEOUT &&
+        (now - r2->timestamp) < TRACKER_RSSI_TIMEOUT) {
+        rssi_corr_az = TRACKER_K_RSSI *
+                       ((int16_t)r1->left - (int16_t)r2->left);
+    }
 
-    if (diff_az > TRACKER_RSSI_DEADZONE)
-        Stepper_SetTarget(STEPPER_AZ, Stepper_GetPosition(STEPPER_AZ) + 1);
-    else if (diff_az < -TRACKER_RSSI_DEADZONE)
-        Stepper_SetTarget(STEPPER_AZ, Stepper_GetPosition(STEPPER_AZ) - 1);
-
-    /* Elevation: outer3 (+el) vs outer4 (-el) */
     const RssiReading *r3 = RSSI_GetReading(RSSI_ANT_OUTER3);
     const RssiReading *r4 = RSSI_GetReading(RSSI_ANT_OUTER4);
-    int16_t diff_el = (int16_t)r3->left - (int16_t)r4->left;
+    if (r3->valid && r4->valid &&
+        (now - r3->timestamp) < TRACKER_RSSI_TIMEOUT &&
+        (now - r4->timestamp) < TRACKER_RSSI_TIMEOUT) {
+        rssi_corr_el = TRACKER_K_RSSI *
+                       ((int16_t)r3->left - (int16_t)r4->left);
+    }
 
-    if (diff_el > TRACKER_RSSI_DEADZONE)
-        Stepper_SetTarget(STEPPER_EL, Stepper_GetPosition(STEPPER_EL) + 1);
-    else if (diff_el < -TRACKER_RSSI_DEADZONE)
-        Stepper_SetTarget(STEPPER_EL, Stepper_GetPosition(STEPPER_EL) - 1);
-}
+    /* ── 3. Combined target ── */
+    float target_az = pred_az + rssi_corr_az;
+    float target_el = pred_el + rssi_corr_el;
 
-static void gps_track(void)
-{
-    if (!has_rocket_fix || !has_initial_fix)
-        return;
-
-    float daz = angle_wrap(current_az - initial_az);
-    float del = current_el - initial_el;
+    float daz = angle_wrap(target_az - initial_az);
+    float del = target_el - initial_el;
 
     Stepper_SetTarget(STEPPER_AZ,
                       (int32_t)(daz * RAD_TO_DEG * TRACKER_STEPS_PER_DEG));
     Stepper_SetTarget(STEPPER_EL,
                       (int32_t)(del * RAD_TO_DEG * TRACKER_STEPS_PER_DEG));
+
+    /* ── 4. Match stepper speed to angular velocity ── */
+    float corr_rate = 1000.0f / TRACKER_CTRL_INTERVAL_MS;
+    float total_omega_az = fabsf(omega_az) + fabsf(rssi_corr_az) * corr_rate;
+    float total_omega_el = fabsf(omega_el) + fabsf(rssi_corr_el) * corr_rate;
+
+    float speed_az = total_omega_az * RAD_TO_DEG * TRACKER_STEPS_PER_DEG;
+    float speed_el = total_omega_el * RAD_TO_DEG * TRACKER_STEPS_PER_DEG;
+
+    Stepper_SetSpeed(STEPPER_AZ,
+                     speed_az > 1.0f ? (uint32_t)(1000.0f / speed_az) : 2);
+    Stepper_SetSpeed(STEPPER_EL,
+                     speed_el > 1.0f ? (uint32_t)(1000.0f / speed_el) : 2);
 }
 
-/* ---- Public API ---- */
+/* ================================================================
+ * Public API
+ * ================================================================ */
 
 void Tracker_Init(float ground_lat, float ground_lon, float ground_alt_m)
 {
@@ -202,7 +301,15 @@ void Tracker_Init(float ground_lat, float ground_lon, float ground_alt_m)
 
     has_initial_fix = 0;
     has_rocket_fix  = 0;
-    last_rssi_check = 0;
+    has_velocity    = 0;
+    last_ctrl_tick  = 0;
+
+    v_up     = 0.0f;
+    vel_az   = 0.0f;
+    prev_alt = 0.0f;
+    prev_az_for_vel = 0.0f;
+    prev_gps_tick   = 0;
+    horiz_dist      = 0.0f;
 
     ground_lat_rad = ground_lat * DEG_TO_RAD;
     ground_lon_rad = ground_lon * DEG_TO_RAD;
@@ -220,11 +327,13 @@ void Tracker_Poll(void)
             read_pos = 0;
     }
 
-    /* RSSI primary, GPS fallback */
-    if (rssi_available())
-        rssi_track();
-    else
-        gps_track();
+    /* Run fused control loop at fixed rate */
+    uint32_t now = HAL_GetTick();
+    if (has_rocket_fix &&
+        (now - last_ctrl_tick) >= TRACKER_CTRL_INTERVAL_MS) {
+        last_ctrl_tick = now;
+        tracking_update();
+    }
 }
 
 void Tracker_HandleRxEvent(UART_HandleTypeDef *huart, uint16_t Size)
