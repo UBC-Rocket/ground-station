@@ -119,8 +119,10 @@ int main(void)
   MX_UART4_Init();
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
-  Stepper_Init();
-  Setup_ManualAlign(); /* blocks until user presses ENTER */
+  Stepper_Init(); //set gpios, pulse width, pulse delay, ...
+  
+  //to see the commands, run screen /dev/cu.usbmodem1103 115200 on a seperate terminal
+  Setup_ManualAlign(); // blocks until user presses ENTER. uses uart2 to echo keys to the mcu, and translate those to commands for the stepper motor and driver
   Passthrough_Init();
   RSSI_Init();
   Tracker_Init(49.2606f, -123.2460f, 80.0f); /* UBC — update for launch site */

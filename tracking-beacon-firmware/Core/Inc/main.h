@@ -73,7 +73,17 @@ void Error_Handler(void);
 #define SWO_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
+#define STEPPER1_DIR_PIN    GPIO_PIN_13
+#define STEPPER1_DIR_PORT   GPIOB
+#define STEPPER1_PUL_PIN    GPIO_PIN_14
+#define STEPPER1_PUL_PORT   GPIOB
 
+#define STEPPER2_DIR_PIN    GPIO_PIN_1
+#define STEPPER2_DIR_PORT   GPIOB
+#define STEPPER2_PUL_PIN    GPIO_PIN_15
+#define STEPPER2_PUL_PORT   GPIOB
+
+#define PULSE_WIDTH_US      5
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

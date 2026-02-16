@@ -5,15 +5,16 @@
 
 extern UART_HandleTypeDef huart2;
 
-#define SETUP_SMALL_STEP  1
-#define SETUP_BIG_STEP    10
-#define STEP_DELAY_MS     2
+#define SETUP_SMALL_STEP  10
+#define SETUP_BIG_STEP    100
+#define STEP_DELAY_MS     0.5 //delay between steppings so we dont skip TODO: double check if this is neccessary
 
 static void print(const char *msg)
 {
     HAL_UART_Transmit(&huart2, (const uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
 }
 
+//uses uart2 to echo keys to the mcu, and translate those to commands for the stepper motor and driver
 void Setup_ManualAlign(void)
 {
     print("\r\n=== Manual Alignment ===\r\n");
@@ -22,7 +23,7 @@ void Setup_ManualAlign(void)
 
     uint8_t ch;
     while (1) {
-        if (HAL_UART_Receive(&huart2, &ch, 1, HAL_MAX_DELAY) != HAL_OK)
+        if (HAL_UART_Receive(&huart2, &ch, 1, HAL_MAX_DELAY) != HAL_OK) //blocking poll until uart2 can recieve something properly; retries when get a bad byte instead of using garbage values
             continue;
 
         int steps = 0;
@@ -30,17 +31,18 @@ void Setup_ManualAlign(void)
         StepperDir dir = STEPPER_CW;
 
         switch (ch) {
-        case 'r': steps = SETUP_SMALL_STEP; axis = STEPPER_AZ; dir = STEPPER_CW;  break;
-        case 'l': steps = SETUP_SMALL_STEP; axis = STEPPER_AZ; dir = STEPPER_CCW; break;
-        case 'u': steps = SETUP_SMALL_STEP; axis = STEPPER_EL; dir = STEPPER_CW;  break;
-        case 'd': steps = SETUP_SMALL_STEP; axis = STEPPER_EL; dir = STEPPER_CCW; break;
-        case 'R': steps = SETUP_BIG_STEP;   axis = STEPPER_AZ; dir = STEPPER_CW;  break;
-        case 'L': steps = SETUP_BIG_STEP;   axis = STEPPER_AZ; dir = STEPPER_CCW; break;
-        case 'U': steps = SETUP_BIG_STEP;   axis = STEPPER_EL; dir = STEPPER_CW;  break;
-        case 'D': steps = SETUP_BIG_STEP;   axis = STEPPER_EL; dir = STEPPER_CCW; break;
+        case 'd': steps = SETUP_SMALL_STEP; axis = STEPPER_AZ; dir = STEPPER_CW;  break;
+        case 'a': steps = SETUP_SMALL_STEP; axis = STEPPER_AZ; dir = STEPPER_CCW; break;
+        case 'w': steps = SETUP_SMALL_STEP; axis = STEPPER_EL; dir = STEPPER_CW;  break;
+        case 's': steps = SETUP_SMALL_STEP; axis = STEPPER_EL; dir = STEPPER_CCW; break;
+        case 'D': steps = SETUP_BIG_STEP;   axis = STEPPER_AZ; dir = STEPPER_CW;  break;
+        case 'A': steps = SETUP_BIG_STEP;   axis = STEPPER_AZ; dir = STEPPER_CCW; break;
+        case 'W': steps = SETUP_BIG_STEP;   axis = STEPPER_EL; dir = STEPPER_CW;  break;
+        case 'S': steps = SETUP_BIG_STEP;   axis = STEPPER_EL; dir = STEPPER_CCW; break;
         case '\r':
         case '\n':
-            Stepper_ZeroPosition(STEPPER_AZ);
+            //zeroing the position once its pointing to rocket
+            Stepper_ZeroPosition(STEPPER_AZ); 
             Stepper_ZeroPosition(STEPPER_EL);
             print("Aligned. Starting tracking.\r\n");
             return;
@@ -48,7 +50,7 @@ void Setup_ManualAlign(void)
             continue;
         }
 
-        /* Echo the key */
+        /* Echo the key */ //here to confirm if the mcu actually recieved the key
         HAL_UART_Transmit(&huart2, &ch, 1, HAL_MAX_DELAY);
 
         for (int i = 0; i < steps; i++) {

@@ -13,9 +13,11 @@ typedef struct {
 
 static StepperMotor motors[STEPPER_COUNT];
 
-/* ~2 us pulse delay at 84 MHz */
+/* ~60 us pulse delay at 84 MHz */
 static inline void step_pulse_delay(void)
 {
+    //84MHz => 84 clock cycles ~1 microsecond
+    //TODO: should we not use a hardware timer? the timing can vary but this is fine for now
     for (int i = 0; i < 84; i++)
         __NOP();
 }
