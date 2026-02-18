@@ -1,0 +1,14 @@
+Capture Metadata
+================
+Filename: capture_20260125_165753.mp4
+Start Time: 2026-01-25 16:57:53
+End Time: 2026-01-25 17:03:06
+Duration: 313.16 seconds
+Total Frames: 5608
+Displayed Frames: 1233
+Resolution: 1920x1080
+Target FPS: 30
+Actual FPS: 17.91
+File Size: 234.22 MB
+UDP Port: 3000
+End Reason: Window closed (X button)
