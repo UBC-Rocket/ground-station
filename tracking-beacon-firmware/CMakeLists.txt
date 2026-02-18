@@ -48,7 +48,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/rssi.c
     Core/Src/stepper.c
     Core/Src/setup.c
-    Core/Src/tracker.c
 )
 
 # Add include paths

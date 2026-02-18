@@ -25,7 +25,6 @@
 #include "rssi.h"
 #include "stepper.h"
 #include "setup.h"
-#include "tracker.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -124,8 +123,8 @@ int main(void)
   //to see the commands, run screen /dev/cu.usbmodem1103 115200 on a seperate terminal
   Setup_ManualAlign(); // blocks until user presses ENTER. uses uart2 to echo keys to the mcu, and translate those to commands for the stepper motor and driver
   Passthrough_Init();
+  Setup_Init();
   RSSI_Init();
-  Tracker_Init(49.2606f, -123.2460f, 80.0f); /* UBC — update for launch site */
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -135,8 +134,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    Setup_Poll();
     RSSI_Poll();
-    Tracker_Poll();
     Stepper_Poll();
   }
   /* USER CODE END 3 */
@@ -479,8 +478,8 @@ static void MX_GPIO_Init(void)
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
   Passthrough_HandleRxEvent(huart, Size);
+  Setup_HandleRxEvent(huart, Size);
   RSSI_HandleRxEvent(huart, Size);
-  Tracker_HandleRxEvent(huart, Size);
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)

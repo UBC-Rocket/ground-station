@@ -70,3 +70,8 @@ const uint8_t *Passthrough_GetCenterRxBuf(void)
 {
     return radio_to_pc.rx_buf;
 }
+
+const uint8_t *Passthrough_GetPcRxBuf(void)
+{
+    return pc_to_radio.rx_buf;
+}

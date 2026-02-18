@@ -19,5 +19,6 @@ void Passthrough_Init(void);
 void Passthrough_HandleRxEvent(UART_HandleTypeDef *huart, uint16_t Size);
 void Passthrough_HandleTxCplt(UART_HandleTypeDef *huart);
 const uint8_t *Passthrough_GetCenterRxBuf(void);
+const uint8_t *Passthrough_GetPcRxBuf(void);
 
 #endif /* PASSTHROUGH_H */
