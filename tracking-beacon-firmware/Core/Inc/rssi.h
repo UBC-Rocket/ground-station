@@ -7,7 +7,6 @@
 #define RSSI_NUM_ANTENNAS 5
 #define RSSI_NUM_OUTER    4
 #define RSSI_RX_BUF_SIZE  512
-#define RSSI_LINE_BUF_SIZE 128
 
 /* Antenna indices */
 #define RSSI_ANT_OUTER1   0  /* USART3 */
@@ -17,10 +16,9 @@
 #define RSSI_ANT_CENTER   4  /* USART1 */
 
 typedef struct {
-    uint8_t left;       /* raw 0-255 */
-    uint8_t right;      /* raw 0-255 */
-    uint8_t valid;      /* 1 after first successful parse */
-    uint32_t timestamp; /* HAL_GetTick() of last update */
+    uint32_t byte_count;    /* total bytes received */
+    uint32_t timestamp;     /* HAL_GetTick() of last received byte */
+    uint8_t  active;        /* 1 if bytes received recently */
 } RssiReading;
 
 void RSSI_Init(void);

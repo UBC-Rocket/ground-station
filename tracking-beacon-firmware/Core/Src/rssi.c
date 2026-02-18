@@ -8,10 +8,11 @@ extern UART_HandleTypeDef huart4;
 extern UART_HandleTypeDef huart5;
 extern UART_HandleTypeDef huart6;
 
+/* Staleness threshold: if no bytes received for this many ms, mark inactive */
+#define RSSI_STALE_MS 2000
+
 typedef struct {
     const uint8_t *rx_buf;
-    uint8_t line_buf[RSSI_LINE_BUF_SIZE];
-    uint16_t line_pos;
     volatile uint16_t write_pos;
     uint16_t read_pos;
     RssiReading reading;
@@ -19,98 +20,6 @@ typedef struct {
 
 static uint8_t outer_rx_bufs[RSSI_NUM_OUTER][RSSI_RX_BUF_SIZE];
 static RssiAntenna antennas[RSSI_NUM_ANTENNAS];
-
-static int parse_uint(const char *s, uint16_t len, uint16_t *pos)
-{
-    int val = 0;
-    int found = 0;
-    while (*pos < len && s[*pos] >= '0' && s[*pos] <= '9') {
-        val = val * 10 + (s[*pos] - '0');
-        (*pos)++;
-        found = 1;
-    }
-    return found ? val : -1;
-}
-
-static void try_parse_rssi(RssiAntenna *ant)
-{
-    const char *prefix = "L/R RSSI: ";
-    const uint16_t prefix_len = 10;
-
-    if (ant->line_pos < prefix_len + 3) /* minimum: "L/R RSSI: 0/0" */
-        return;
-
-    /* Find prefix in line */
-    char *line = (char *)ant->line_buf;
-    char *found = NULL;
-    for (uint16_t i = 0; i <= ant->line_pos - prefix_len; i++) {
-        if (memcmp(&line[i], prefix, prefix_len) == 0) {
-            found = &line[i + prefix_len];
-            break;
-        }
-    }
-    if (!found)
-        return;
-
-    uint16_t remaining = ant->line_pos - (uint16_t)(found - line);
-    uint16_t pos = 0;
-
-    int left = parse_uint(found, remaining, &pos);
-    if (left < 0 || left > 255 || pos >= remaining || found[pos] != '/')
-        return;
-    pos++; /* skip '/' */
-
-    int right = parse_uint(found, remaining, &pos);
-    if (right < 0 || right > 255)
-        return;
-
-    ant->reading.left = (uint8_t)left;
-    ant->reading.right = (uint8_t)right;
-    ant->reading.valid = 1;
-    ant->reading.timestamp = HAL_GetTick();
-}
-
-static void process_byte(RssiAntenna *ant, uint8_t byte)
-{
-    if (byte == 0x00) {
-        /* End of COBS packet — discard accumulated line data */
-        ant->line_pos = 0;
-        return;
-    }
-
-    if (byte == '\n') {
-        /* End of text line — try to parse RSSI */
-        try_parse_rssi(ant);
-        ant->line_pos = 0;
-        return;
-    }
-
-    if (byte == '\r')
-        return;
-
-    /* Accumulate into line buffer */
-    if (ant->line_pos < RSSI_LINE_BUF_SIZE) {
-        ant->line_buf[ant->line_pos++] = byte;
-    } else {
-        /* Overflow — reset */
-        ant->line_pos = 0;
-    }
-}
-
-static void poll_antenna(RssiAntenna *ant)
-{
-    uint16_t wp = ant->write_pos;
-    uint16_t rp = ant->read_pos;
-
-    while (rp != wp) {
-        process_byte(ant, ant->rx_buf[rp]);
-        rp++;
-        if (rp >= RSSI_RX_BUF_SIZE)
-            rp = 0;
-    }
-
-    ant->read_pos = rp;
-}
 
 void RSSI_Init(void)
 {
@@ -132,8 +41,31 @@ void RSSI_Init(void)
 
 void RSSI_Poll(void)
 {
-    for (int i = 0; i < RSSI_NUM_ANTENNAS; i++)
-        poll_antenna(&antennas[i]);
+    uint32_t now = HAL_GetTick();
+
+    for (int i = 0; i < RSSI_NUM_ANTENNAS; i++) {
+        RssiAntenna *ant = &antennas[i];
+        uint16_t wp = ant->write_pos;
+        uint16_t rp = ant->read_pos;
+
+        if (rp != wp) {
+            /* Count new bytes received */
+            uint16_t new_bytes;
+            if (wp >= rp)
+                new_bytes = wp - rp;
+            else
+                new_bytes = RSSI_RX_BUF_SIZE - rp + wp;
+
+            ant->reading.byte_count += new_bytes;
+            ant->reading.timestamp = now;
+            ant->reading.active = 1;
+            ant->read_pos = wp;
+        }
+
+        /* Mark stale if no data for a while */
+        if (ant->reading.active && (now - ant->reading.timestamp) > RSSI_STALE_MS)
+            ant->reading.active = 0;
+    }
 }
 
 void RSSI_HandleRxEvent(UART_HandleTypeDef *huart, uint16_t Size)
