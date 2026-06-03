@@ -84,6 +84,10 @@ void Error_Handler(void);
 #define STEPPER2_PUL_PORT   GPIOB
 
 #define PULSE_WIDTH_US      5
+
+/* TODO: Set correct port/pin for limit switch input (HIGH = switch hit) */
+#define LIMIT_SW_PORT       GPIOA
+#define LIMIT_SW_PIN        GPIO_PIN_0
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

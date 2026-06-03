@@ -117,12 +117,18 @@ int main(void)
   MX_UART4_Init();
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
-  Stepper_Init(); //set gpios, pulse width, pulse delay, ...
+  Stepper_Init();
 
-  //to see the commands, run screen /dev/cu.usbmodem1103 115200 on a seperate terminal
-  Setup_ManualAlign(); // blocks until user presses ENTER. uses uart2 to echo keys to the mcu, and translate those to commands for the stepper motor and driver
+  // to see the commands, run: screen /dev/cu.usbmodem1103 115200
+  GPSCoord home_pos = {0};
+  Setup_PositionInit();       // blocks: WASD alignment, zeros position on ENTER (limit swithc is also taken into consideration)
+  Setup_GPSInit(&home_pos);   // blocks: prompts for GPS coordinates on ENTER
+
+  // here we set up the DMA, also why the position and gps init was done earlier since they are blocking
   Passthrough_Init();
   Setup_Init();
+
+  SystemState state = STATE_TRACKING;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -132,8 +138,14 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    Setup_Poll();
-    Stepper_Poll();
+    switch (state) {
+    case STATE_TRACKING:
+        Setup_TrackingPoll();
+        Stepper_Poll();
+        break;
+    default:
+        break;
+    }
   }
   /* USER CODE END 3 */
 }

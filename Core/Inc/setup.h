@@ -4,9 +4,30 @@
 #include "stm32f4xx_hal.h"
 #include <stdint.h>
 
-/* Blocks until the user finishes manual alignment.
-   Call after Stepper_Init, before Passthrough/RSSI init. */
-void Setup_ManualAlign(void);
+typedef enum {
+    STATE_POSITION_INIT,
+    STATE_GPS_INIT,
+    STATE_TRACKING
+} SystemState;
+
+typedef struct {
+    double lat;
+    double lon;
+    double alt;
+} GPSCoord;
+
+/* Blocks until user positions beacon and presses ENTER; zeros both motor axes on exit.
+   Limit switch (LIMIT_SW_PORT/PIN HIGH) disables movement commands but not ENTER.
+   Call after Stepper_Init, before GPS init. */
+void Setup_PositionInit(void);
+
+/* Blocks until user enters GPS coordinates via UART2. Stores result in *out.
+   Call after Setup_PositionInit, before Passthrough_Init. */
+void Setup_GPSInit(GPSCoord *out);
+
+/* Skeleton for tracking mode — PID feedback loop will go here.
+   Call from main loop during STATE_TRACKING. I have not written the detailed code for this yet => its a placeholder*/
+void Setup_TrackingPoll(void);
 
 /* Call after Passthrough_Init to enable non-blocking manual control. */
 void Setup_Init(void);
